@@ -1,0 +1,206 @@
+use std::io::{self, BufRead, IsTerminal, Write};
+
+use anyhow::{bail, Result};
+
+use crate::config::{Config, Subcommand, TuiLaunchMode};
+use crate::store::CommandStore;
+
+pub const USAGE_TEXT: &str = "\
+Usage:
+  com                                      Launch the interactive Ratatui studio
+  com tui                                  Launch the interactive Ratatui studio
+  com add [name] [--args <args>] [--desc <desc>] [--blank]
+                                           Create a .md command under ./commands (with 3-line header)
+  com get [name]                           Print contents of a .md command from ./commands
+  com list                                 List all available commands with Args & Description
+  com edit <name>                          Open a command definition in $EDITOR
+  com rm <name>                            Delete a command definition from ./commands
+  com help                                 Show this help message
+
+Global Options:
+  -d, --dir <path>                         Override commands directory (default: $OCTO_COMMANDS_DIR or ./commands)
+";
+
+pub enum CliOutcome {
+    Handled,
+    LaunchTui(TuiLaunchMode),
+}
+
+pub fn execute_cli(config: &Config) -> Result<CliOutcome> {
+    let store = CommandStore::new(&config.commands_dir);
+
+    match &config.subcommand {
+        Subcommand::Help => {
+            print!("{}", USAGE_TEXT);
+            Ok(CliOutcome::Handled)
+        }
+        Subcommand::Tui { mode } => Ok(CliOutcome::LaunchTui(mode.clone())),
+        Subcommand::Add {
+            name,
+            args,
+            desc,
+            blank,
+        } => {
+            let target_name = match name {
+                Some(n) => n.clone(),
+                None => {
+                    if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                        return Ok(CliOutcome::LaunchTui(TuiLaunchMode::CreateModal));
+                    }
+                    eprint!("Command name: ");
+                    let _ = io::stderr().flush();
+                    let mut line = String::new();
+                    io::stdin().lock().read_line(&mut line)?;
+                    line.trim_end_matches(&['\r', '\n'][..]).to_string()
+                }
+            };
+
+            let created = store.create_command(
+                &target_name,
+                args.as_deref(),
+                desc.as_deref(),
+                None,
+                *blank,
+            )?;
+            println!("Created {}", created.path.display());
+            Ok(CliOutcome::Handled)
+        }
+        Subcommand::Get { name } => {
+            let target_name = match name {
+                Some(n) => n.clone(),
+                None => {
+                    let docs = store.list_commands()?;
+                    if docs.is_empty() {
+                        bail!("No commands found in {}.", store.dir.display());
+                    }
+                    if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                        return Ok(CliOutcome::LaunchTui(TuiLaunchMode::SelectForGet));
+                    }
+                    bail!("Command name cannot be empty.");
+                }
+            };
+
+            let doc = store.get_command(&target_name)?;
+            print!("{}", doc.raw_content);
+            Ok(CliOutcome::Handled)
+        }
+        Subcommand::List => {
+            let docs = store.list_commands()?;
+            print!("{}", format_command_list(&docs));
+            Ok(CliOutcome::Handled)
+        }
+        Subcommand::Edit { name } => {
+            let doc = store.get_command(name)?;
+            let editor = std::env::var("EDITOR")
+                .or_else(|_| std::env::var("VISUAL"))
+                .unwrap_or_else(|_| "nano".to_string());
+            let status = std::process::Command::new(&editor)
+                .arg(&doc.path)
+                .status()?;
+            if !status.success() {
+                bail!("Editor '{}' exited with status {}.", editor, status);
+            }
+            Ok(CliOutcome::Handled)
+        }
+        Subcommand::Remove { name } => {
+            let deleted_path = store.delete_command(name)?;
+            println!("Removed {}", deleted_path.display());
+            Ok(CliOutcome::Handled)
+        }
+    }
+}
+
+pub fn format_command_list(docs: &[crate::models::CommandDoc]) -> String {
+    if docs.is_empty() {
+        return "0 commands available.\n".to_string();
+    }
+
+    let mut out = format!("{} commands available:\n\n", docs.len());
+    let cmd_width = docs
+        .iter()
+        .map(|d| d.name.len() + 2)
+        .max()
+        .unwrap_or(7)
+        .max(7);
+    let args_width = docs
+        .iter()
+        .map(|d| d.display_args().unwrap_or("-").len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+
+    out.push_str(&format!(
+        "{:<cmd_w$}  {:<args_w$}  DESCRIPTION\n",
+        "COMMAND",
+        "ARGS",
+        cmd_w = cmd_width,
+        args_w = args_width
+    ));
+    out.push_str(&format!(
+        "{:-<cmd_w$}  {:-<args_w$}  -----------\n",
+        "",
+        "",
+        cmd_w = cmd_width,
+        args_w = args_width
+    ));
+
+    for doc in docs {
+        let cmd_col = format!("$${}", doc.name);
+        let args_col = doc.display_args().unwrap_or("-");
+        let desc_col = doc.display_description();
+        out.push_str(&format!(
+            "{:<cmd_w$}  {:<args_w$}  {}\n",
+            cmd_col,
+            args_col,
+            desc_col,
+            cmd_w = cmd_width,
+            args_w = args_width
+        ));
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_cli_add_get_list_rm() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("commands");
+
+        let add_cfg = Config {
+            commands_dir: dir.clone(),
+            subcommand: Subcommand::Add {
+                name: Some("hello".to_string()),
+                args: Some("[name]".to_string()),
+                desc: Some("Greet a user".to_string()),
+                blank: false,
+            },
+        };
+        assert!(matches!(
+            execute_cli(&add_cfg).unwrap(),
+            CliOutcome::Handled
+        ));
+
+        let store = CommandStore::new(&dir);
+        let docs = store.list_commands().unwrap();
+        assert_eq!(docs.len(), 1);
+        let table = format_command_list(&docs);
+        assert!(table.contains("1 commands available:"));
+        assert!(table.contains("$$hello"));
+        assert!(table.contains("[name]"));
+        assert!(table.contains("Greet a user"));
+
+        let rm_cfg = Config {
+            commands_dir: dir.clone(),
+            subcommand: Subcommand::Remove {
+                name: "hello".to_string(),
+            },
+        };
+        assert!(matches!(execute_cli(&rm_cfg).unwrap(), CliOutcome::Handled));
+        assert!(store.list_commands().unwrap().is_empty());
+    }
+}
