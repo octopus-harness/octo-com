@@ -51,7 +51,7 @@ It gives AI agents zero-latency CLI access (`com get <name>`, `com add <name>`, 
 
 ```bash
 # Rapid development symlink to /usr/local/bin (automatically builds cargo --release)
-./install.sh # or ./scripts/install-dev.sh
+./scripts/install-dev.sh
 
 # Build release binaries (target/release/com and target/release/octo-com)
 cargo build --release
