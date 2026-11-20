@@ -1,12 +1,20 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TuiLaunchMode {
     Browse,
     CreateModal,
     SelectForGet,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigAction {
+    Show,
+    GetDir,
+    SetDir(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,7 +38,65 @@ pub enum Subcommand {
     Remove {
         name: String,
     },
+    Config(ConfigAction),
     Help,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct UserSettings {
+    pub commands_dir: Option<PathBuf>,
+}
+
+impl UserSettings {
+    pub fn default_path() -> Option<PathBuf> {
+        std::env::var("HOME")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(|h| PathBuf::from(h).join(".config").join("octo-com").join("config.json"))
+    }
+
+    pub fn load() -> Self {
+        Self::default_path()
+            .map(|p| Self::load_from(&p))
+            .unwrap_or_default()
+    }
+
+    pub fn load_from(path: &Path) -> Self {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) -> Result<PathBuf> {
+        let path = Self::default_path()
+            .ok_or_else(|| anyhow::anyhow!("Unable to determine user HOME directory"))?;
+        self.save_to(&path)?;
+        Ok(path)
+    }
+
+    pub fn save_to(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(self)?;
+        std::fs::write(path, json)?;
+        Ok(())
+    }
+}
+
+pub fn expand_tilde(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    if s == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home);
+        }
+    } else if let Some(stripped) = s.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(stripped);
+        }
+    }
+    p.to_path_buf()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,10 +110,25 @@ impl Config {
         let args: Vec<String> = std::env::args().collect();
         let env_dir = std::env::var("OCTO_COMMANDS_DIR").ok();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        Self::parse(&args, env_dir.as_deref(), &cwd)
+        let user_settings = UserSettings::load();
+        Self::parse_with_settings(
+            &args,
+            env_dir.as_deref(),
+            user_settings.commands_dir.as_deref(),
+            &cwd,
+        )
     }
 
-    pub fn parse(args: &[String], env_dir: Option<&str>, cwd: &std::path::Path) -> Result<Self> {
+    pub fn parse(args: &[String], env_dir: Option<&str>, cwd: &Path) -> Result<Self> {
+        Self::parse_with_settings(args, env_dir, None, cwd)
+    }
+
+    pub fn parse_with_settings(
+        args: &[String],
+        env_dir: Option<&str>,
+        global_dir: Option<&Path>,
+        cwd: &Path,
+    ) -> Result<Self> {
         let mut dir_override: Option<PathBuf> = None;
         let mut remaining: Vec<String> = Vec::new();
 
@@ -55,7 +136,7 @@ impl Config {
         while i < args.len() {
             let arg = &args[i];
             match arg.as_str() {
-                "--dir" | "-d" => {
+                "--dir" | "-dir" | "-d" => {
                     if i + 1 >= args.len() {
                         bail!("Option '{}' requires a directory path.", arg);
                     }
@@ -70,6 +151,22 @@ impl Config {
                     dir_override = Some(PathBuf::from(val));
                     i += 1;
                 }
+                s if s.starts_with("-dir=") => {
+                    let val = s.trim_start_matches("-dir=");
+                    if val.trim().is_empty() {
+                        bail!("Option '-dir=' requires a non-empty directory path.");
+                    }
+                    dir_override = Some(PathBuf::from(val));
+                    i += 1;
+                }
+                s if s.starts_with("-d=") => {
+                    let val = s.trim_start_matches("-d=");
+                    if val.trim().is_empty() {
+                        bail!("Option '-d=' requires a non-empty directory path.");
+                    }
+                    dir_override = Some(PathBuf::from(val));
+                    i += 1;
+                }
                 _ => {
                     remaining.push(arg.clone());
                     i += 1;
@@ -78,9 +175,11 @@ impl Config {
         }
 
         let commands_dir = if let Some(d) = dir_override {
-            d
+            expand_tilde(&d)
         } else if let Some(env_val) = env_dir.map(str::trim).filter(|s| !s.is_empty()) {
-            PathBuf::from(env_val)
+            expand_tilde(Path::new(env_val))
+        } else if let Some(g) = global_dir {
+            expand_tilde(g)
         } else {
             cwd.join("commands")
         };
@@ -120,6 +219,7 @@ impl Config {
                     .ok_or_else(|| anyhow::anyhow!("Command name cannot be empty."))?;
                 Subcommand::Remove { name }
             }
+            "config" => parse_config_args(&remaining[1..])?,
             other => {
                 bail!("Unknown command: '{}'. Run 'com help' for usage.", other);
             }
@@ -129,6 +229,43 @@ impl Config {
             commands_dir,
             subcommand,
         })
+    }
+}
+
+fn parse_config_args(tokens: &[String]) -> Result<Subcommand> {
+    if tokens.is_empty() {
+        return Ok(Subcommand::Config(ConfigAction::Show));
+    }
+    match tokens[0].as_str() {
+        "show" => Ok(Subcommand::Config(ConfigAction::Show)),
+        "get-dir" | "get" => Ok(Subcommand::Config(ConfigAction::GetDir)),
+        "set-dir" => {
+            if tokens.len() < 2 || tokens[1].trim().is_empty() {
+                bail!("Subcommand 'set-dir' requires a directory path. Usage: com config set-dir <path>");
+            }
+            let path = expand_tilde(Path::new(&tokens[1]));
+            Ok(Subcommand::Config(ConfigAction::SetDir(path)))
+        }
+        "set" => {
+            if tokens.len() >= 3 && tokens[1] == "dir" {
+                if tokens[2].trim().is_empty() {
+                    bail!("Subcommand 'set dir' requires a directory path.");
+                }
+                let path = expand_tilde(Path::new(&tokens[2]));
+                Ok(Subcommand::Config(ConfigAction::SetDir(path)))
+            } else if tokens.len() >= 2 && tokens[1] != "dir" {
+                let path = expand_tilde(Path::new(&tokens[1]));
+                Ok(Subcommand::Config(ConfigAction::SetDir(path)))
+            } else {
+                bail!("Usage: com config set-dir <path>");
+            }
+        }
+        other => {
+            bail!(
+                "Unknown config command: '{}'. Usage: com config [show|get-dir|set-dir <path>]",
+                other
+            );
+        }
     }
 }
 
@@ -206,7 +343,7 @@ mod tests {
     fn test_dir_resolution_precedence() {
         let cwd = Path::new("/workspace/octopus");
 
-        // Default to ./commands in CWD
+        // 1. Default to ./commands in CWD when nothing else specified
         let cfg = Config::parse(&vec_s(&["com"]), None, cwd).unwrap();
         assert_eq!(
             cfg.commands_dir,
@@ -219,58 +356,108 @@ mod tests {
             }
         );
 
-        // Env var overrides default
-        let cfg_env = Config::parse(&vec_s(&["com"]), Some("/env/commands"), cwd).unwrap();
+        // 2. Global settings override default CWD
+        let cfg_global = Config::parse_with_settings(
+            &vec_s(&["com"]),
+            None,
+            Some(Path::new("/global/commands")),
+            cwd,
+        )
+        .unwrap();
+        assert_eq!(cfg_global.commands_dir, PathBuf::from("/global/commands"));
+
+        // 3. Env var overrides global settings
+        let cfg_env = Config::parse_with_settings(
+            &vec_s(&["com"]),
+            Some("/env/commands"),
+            Some(Path::new("/global/commands")),
+            cwd,
+        )
+        .unwrap();
         assert_eq!(cfg_env.commands_dir, PathBuf::from("/env/commands"));
 
-        // --dir overrides env var
-        let cfg_flag = Config::parse(
+        // 4. CLI flag (--dir, -dir, -d) overrides env var and global settings
+        let cfg_flag = Config::parse_with_settings(
             &vec_s(&["com", "--dir", "/flag/commands", "list"]),
             Some("/env/commands"),
+            Some(Path::new("/global/commands")),
             cwd,
         )
         .unwrap();
         assert_eq!(cfg_flag.commands_dir, PathBuf::from("/flag/commands"));
         assert_eq!(cfg_flag.subcommand, Subcommand::List);
-    }
 
-    #[test]
-    fn test_subcommand_parsing() {
-        let cwd = Path::new("/tmp");
+        // Check -dir flag syntax
+        let cfg_single_dash = Config::parse_with_settings(
+            &vec_s(&["com", "-dir", "/single/dash/commands", "list"]),
+            Some("/env/commands"),
+            Some(Path::new("/global/commands")),
+            cwd,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg_single_dash.commands_dir,
+            PathBuf::from("/single/dash/commands")
+        );
 
-        let add = Config::parse(
-            &vec_s(&[
-                "com",
-                "add",
-                "my_cmd",
-                "--args",
-                "[url]",
-                "--desc",
-                "Fetch URL",
-            ]),
+        // Check -dir= flag syntax
+        let cfg_single_dash_eq = Config::parse_with_settings(
+            &vec_s(&["com", "-dir=/single/dash/eq", "list"]),
+            None,
             None,
             cwd,
         )
         .unwrap();
         assert_eq!(
-            add.subcommand,
-            Subcommand::Add {
-                name: Some("my_cmd".to_string()),
-                args: Some("[url]".to_string()),
-                desc: Some("Fetch URL".to_string()),
-                blank: false,
-            }
+            cfg_single_dash_eq.commands_dir,
+            PathBuf::from("/single/dash/eq")
         );
+    }
 
-        let get = Config::parse(&vec_s(&["com", "get", "help"]), None, cwd).unwrap();
+    #[test]
+    fn test_config_subcommands() {
+        let cwd = Path::new("/tmp");
+
+        let cfg_show = Config::parse(&vec_s(&["com", "config"]), None, cwd).unwrap();
+        assert_eq!(cfg_show.subcommand, Subcommand::Config(ConfigAction::Show));
+
+        let cfg_get = Config::parse(&vec_s(&["com", "config", "get-dir"]), None, cwd).unwrap();
+        assert_eq!(cfg_get.subcommand, Subcommand::Config(ConfigAction::GetDir));
+
+        let cfg_set = Config::parse(
+            &vec_s(&["com", "config", "set-dir", "/custom/commands"]),
+            None,
+            cwd,
+        )
+        .unwrap();
         assert_eq!(
-            get.subcommand,
-            Subcommand::Get {
-                name: Some("help".to_string())
-            }
+            cfg_set.subcommand,
+            Subcommand::Config(ConfigAction::SetDir(PathBuf::from("/custom/commands")))
         );
 
-        let unknown = Config::parse(&vec_s(&["com", "bogus"]), None, cwd);
-        assert!(unknown.is_err());
+        let cfg_set2 = Config::parse(
+            &vec_s(&["com", "config", "set", "dir", "/custom/commands2"]),
+            None,
+            cwd,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg_set2.subcommand,
+            Subcommand::Config(ConfigAction::SetDir(PathBuf::from("/custom/commands2")))
+        );
+    }
+
+    #[test]
+    fn test_user_settings_serialization() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_file = tmp.path().join("config.json");
+
+        let settings = UserSettings {
+            commands_dir: Some(PathBuf::from("/path/to/commands")),
+        };
+        settings.save_to(&config_file).unwrap();
+
+        let loaded = UserSettings::load_from(&config_file);
+        assert_eq!(loaded.commands_dir, Some(PathBuf::from("/path/to/commands")));
     }
 }

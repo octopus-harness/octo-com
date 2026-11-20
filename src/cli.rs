@@ -2,7 +2,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 
 use anyhow::{bail, Result};
 
-use crate::config::{Config, Subcommand, TuiLaunchMode};
+use crate::config::{Config, ConfigAction, Subcommand, TuiLaunchMode, UserSettings};
 use crate::store::CommandStore;
 
 pub const USAGE_TEXT: &str = "\
@@ -15,10 +15,13 @@ Usage:
   com list                                 List all available commands with Args & Description
   com edit <name>                          Open a command definition in $EDITOR
   com rm <name>                            Delete a command definition from ./commands
+  com config [show]                        Display current configuration and resolved directory
+  com config get-dir                       Print the active commands directory
+  com config set-dir <path>                Set the persistent global commands directory
   com help                                 Show this help message
 
 Global Options:
-  -d, --dir <path>                         Override commands directory (default: $OCTO_COMMANDS_DIR or ./commands)
+  -d, --dir, -dir <path>                   Override commands directory (default: $OCTO_COMMANDS_DIR, ~/.config/octo-com/config.json, or ./commands)
 ";
 
 pub enum CliOutcome {
@@ -105,6 +108,38 @@ pub fn execute_cli(config: &Config) -> Result<CliOutcome> {
         Subcommand::Remove { name } => {
             let deleted_path = store.delete_command(name)?;
             println!("Removed {}", deleted_path.display());
+            Ok(CliOutcome::Handled)
+        }
+        Subcommand::Config(action) => {
+            match action {
+                ConfigAction::Show => {
+                    let path = UserSettings::default_path()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let user_settings = UserSettings::load();
+                    let global_dir_str = user_settings
+                        .commands_dir
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "(none)".to_string());
+
+                    println!("Configuration file: {}", path);
+                    println!("Global commands directory: {}", global_dir_str);
+                    println!("Active commands directory: {}", config.commands_dir.display());
+                }
+                ConfigAction::GetDir => {
+                    println!("{}", config.commands_dir.display());
+                }
+                ConfigAction::SetDir(path) => {
+                    let mut settings = UserSettings::load();
+                    settings.commands_dir = Some(path.clone());
+                    let saved_file = settings.save()?;
+                    println!(
+                        "Saved global commands directory: {}\nConfig file: {}",
+                        path.display(),
+                        saved_file.display()
+                    );
+                }
+            }
             Ok(CliOutcome::Handled)
         }
     }

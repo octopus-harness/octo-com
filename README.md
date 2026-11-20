@@ -29,9 +29,10 @@ It gives AI agents zero-latency CLI access (`com get <name>`, `com add <name>`, 
   - `com rm <name>`: Deletes `./commands/<name>.md`.
   - `com` / `com tui`: Launches the full-screen Ratatui studio.
 - **Directory Resolution Chain**:
-  1. `--dir <path>` / `-d <path>` CLI flag
+  1. `--dir <path>` / `-dir <path>` / `-d <path>` CLI flag
   2. `OCTO_COMMANDS_DIR` environment variable
-  3. `./commands` in the current working directory (automatically created if missing)
+  3. Persistent global setting in `~/.config/octo-com/config.json` (`com config set-dir <path>`)
+  4. `./commands` in the current working directory (automatically created if missing)
 - **2-Pane Master–Detail TUI Studio (Octopus Magenta/Purple Theme)**:
   - **Header Bar**: `🐙 OCTO-COM` badge, active `[Dir: <path>]`, live command/header/step/line statistics, active view mode (`Preview (GFM)` or `Raw`), and search filter indicator.
   - **Pane 1 `[1] Commands`**: Searchable list of `.md` commands showing `$$<name>`, `Args` badge, step counter (`[N steps]`) or `[!header]` warning badge, and one-line description.
@@ -49,11 +50,25 @@ It gives AI agents zero-latency CLI access (`com get <name>`, `com add <name>`, 
 ## Installation & Usage
 
 ```bash
+# Rapid development symlink to /usr/local/bin (automatically builds cargo --release)
+./install.sh # or ./scripts/install-dev.sh
+
 # Build release binaries (target/release/com and target/release/octo-com)
 cargo build --release
 
 # Install to ~/.cargo/bin
 cargo install --path .
+```
+
+### Setting Global Commands Directory
+
+```bash
+# Persist your global commands directory so you can run 'com' anywhere without flags
+com config set-dir /Users/leonid/src/octopus/commands
+
+# View current configuration and resolved directory
+com config
+com config get-dir
 ```
 
 ### CLI Examples
