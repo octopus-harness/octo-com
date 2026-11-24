@@ -5,6 +5,7 @@ pub mod format;
 pub mod models;
 pub mod store;
 pub mod ui;
+pub mod vars;
 
 use std::io;
 use std::time::Duration;

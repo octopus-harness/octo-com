@@ -18,6 +18,12 @@ pub enum ConfigAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VarsAction {
+    Show,
+    Edit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Subcommand {
     Tui {
         mode: TuiLaunchMode,
@@ -31,6 +37,7 @@ pub enum Subcommand {
     },
     Get {
         name: Option<String>,
+        raw: bool,
     },
     List {
         category: Option<String>,
@@ -42,6 +49,7 @@ pub enum Subcommand {
         name: String,
     },
     Config(ConfigAction),
+    Vars(VarsAction),
     Help,
 }
 
@@ -203,10 +211,7 @@ impl Config {
                 mode: TuiLaunchMode::Browse,
             },
             "list" | "ls" => parse_list_args(&remaining[1..])?,
-            "get" => {
-                let name = remaining.get(1).cloned();
-                Subcommand::Get { name }
-            }
+            "get" => parse_get_args(&remaining[1..])?,
             "add" => parse_add_args(&remaining[1..])?,
             "edit" => {
                 let name = remaining
@@ -223,6 +228,7 @@ impl Config {
                 Subcommand::Remove { name }
             }
             "config" => parse_config_args(&remaining[1..])?,
+            "vars" | "var" => parse_vars_args(&remaining[1..])?,
             other => {
                 bail!("Unknown command: '{}'. Run 'com help' for usage.", other);
             }
@@ -232,6 +238,36 @@ impl Config {
             commands_dir,
             subcommand,
         })
+    }
+}
+
+fn parse_get_args(tokens: &[String]) -> Result<Subcommand> {
+    let mut name = None;
+    let mut raw = false;
+    for token in tokens {
+        if token == "--raw" || token == "-r" {
+            raw = true;
+        } else if token.starts_with('-') {
+            bail!("Unknown option for 'get': '{}'.", token);
+        } else if name.is_none() {
+            name = Some(token.clone());
+        } else {
+            bail!("Unexpected argument for 'get': '{}'.", token);
+        }
+    }
+    Ok(Subcommand::Get { name, raw })
+}
+
+fn parse_vars_args(tokens: &[String]) -> Result<Subcommand> {
+    if tokens.is_empty() {
+        return Ok(Subcommand::Vars(VarsAction::Show));
+    }
+    match tokens[0].as_str() {
+        "show" | "list" | "ls" => Ok(Subcommand::Vars(VarsAction::Show)),
+        "edit" | "e" => Ok(Subcommand::Vars(VarsAction::Edit)),
+        other => {
+            bail!("Unknown vars command: '{}'. Usage: com vars [edit]", other);
+        }
     }
 }
 
@@ -535,6 +571,32 @@ mod tests {
         assert_eq!(
             cfg_set2.subcommand,
             Subcommand::Config(ConfigAction::SetDir(PathBuf::from("/custom/commands2")))
+        );
+
+        // Test vars subcommand parsing
+        let cfg_vars = Config::parse(&vec_s(&["com", "vars"]), None, cwd).unwrap();
+        assert_eq!(cfg_vars.subcommand, Subcommand::Vars(VarsAction::Show));
+
+        let cfg_vars_edit = Config::parse(&vec_s(&["com", "vars", "edit"]), None, cwd).unwrap();
+        assert_eq!(cfg_vars_edit.subcommand, Subcommand::Vars(VarsAction::Edit));
+
+        // Test get subcommand parsing with and without --raw
+        let cfg_get_normal = Config::parse(&vec_s(&["com", "get", "add_research"]), None, cwd).unwrap();
+        assert_eq!(
+            cfg_get_normal.subcommand,
+            Subcommand::Get {
+                name: Some("add_research".to_string()),
+                raw: false,
+            }
+        );
+
+        let cfg_get_raw = Config::parse(&vec_s(&["com", "get", "add_research", "--raw"]), None, cwd).unwrap();
+        assert_eq!(
+            cfg_get_raw.subcommand,
+            Subcommand::Get {
+                name: Some("add_research".to_string()),
+                raw: true,
+            }
         );
     }
 
