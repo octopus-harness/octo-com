@@ -130,6 +130,7 @@ impl CommandStore {
     pub fn create_command(
         &self,
         raw_name: &str,
+        category: Option<&str>,
         args: Option<&str>,
         description: Option<&str>,
         body: Option<&str>,
@@ -150,7 +151,7 @@ impl CommandStore {
         let content = if blank {
             String::new()
         } else {
-            scaffold_command_markdown(&stem, args, description, body)
+            scaffold_command_markdown(&stem, category, args, description, body)
         };
 
         fs::write(&target, &content)
@@ -163,6 +164,7 @@ impl CommandStore {
         &self,
         old_name: &str,
         new_name: &str,
+        category: &str,
         args: &str,
         description: &str,
     ) -> Result<CommandDoc> {
@@ -185,7 +187,7 @@ impl CommandStore {
             args.trim()
         };
         let usage = format_usage_line(&new_stem, clean_args);
-        let new_raw = serialize_command_markdown(&usage, clean_args, description, &existing.body);
+        let new_raw = serialize_command_markdown(&usage, clean_args, description, category, &existing.body);
 
         fs::write(&new_target, &new_raw)
             .with_context(|| format!("Failed to write {}", new_target.display()))?;
@@ -303,17 +305,18 @@ mod tests {
         let store = CommandStore::new(tmp.path().join("commands"));
 
         let created = store
-            .create_command("my_cmd", Some("[url]"), Some("Fetch URL"), None, false)
+            .create_command("my_cmd", Some("web"), Some("[url]"), Some("Fetch URL"), None, false)
             .unwrap();
         assert_eq!(created.name, "my_cmd");
         assert!(created.has_valid_header);
         assert_eq!(created.usage.as_deref(), Some("$$my_cmd [url]"));
         assert_eq!(created.args.as_deref(), Some("[url]"));
         assert_eq!(created.description.as_deref(), Some("Fetch URL"));
+        assert_eq!(created.display_category(), "web");
 
         // Duplicate should fail
         assert!(store
-            .create_command("my_cmd", None, None, None, false)
+            .create_command("my_cmd", None, None, None, None, false)
             .is_err());
 
         // Append step 1 and step 2
@@ -330,10 +333,11 @@ mod tests {
 
         // Rename and update header
         let renamed = store
-            .update_command_header("my_cmd", "fetch_url", "<url>", "Updated description")
+            .update_command_header("my_cmd", "fetch_url", "network", "<url>", "Updated description")
             .unwrap();
         assert_eq!(renamed.name, "fetch_url");
         assert_eq!(renamed.usage.as_deref(), Some("$$fetch_url <url>"));
+        assert_eq!(renamed.display_category(), "network");
         assert_eq!(renamed.step_count(), 2);
         assert!(store.get_command("my_cmd").is_err());
 

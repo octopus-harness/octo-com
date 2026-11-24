@@ -8,6 +8,7 @@ pub struct CommandDoc {
     pub usage: Option<String>,
     pub args: Option<String>,
     pub description: Option<String>,
+    pub category: Option<String>,
     pub has_valid_header: bool,
     pub body: String,
     pub raw_content: String,
@@ -32,6 +33,7 @@ impl CommandDoc {
             usage: parsed.usage,
             args: parsed.args,
             description: parsed.description,
+            category: parsed.category,
             has_valid_header: parsed.has_valid_header,
             body: parsed.body,
             raw_content,
@@ -69,6 +71,14 @@ impl CommandDoc {
             .unwrap_or("(no description)")
     }
 
+    pub fn display_category(&self) -> &str {
+        self.category
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && *s != "-")
+            .unwrap_or("Uncategorized")
+    }
+
     pub fn step_count(&self) -> usize {
         count_numbered_steps(&self.body)
     }
@@ -79,6 +89,7 @@ pub struct ParsedCommand {
     pub usage: Option<String>,
     pub args: Option<String>,
     pub description: Option<String>,
+    pub category: Option<String>,
     pub has_valid_header: bool,
     pub body: String,
 }
@@ -97,9 +108,24 @@ pub fn parse_command_markdown(raw: &str) -> ParsedCommand {
             strip_case_insensitive_prefix(line2, "Args:"),
             strip_case_insensitive_prefix(line3, "Description:"),
         ) {
-            let remaining: Vec<&str> = lines.collect();
+            let mut category = None;
+            let mut remaining: Vec<&str> = Vec::new();
+
+            if let Some(line4) = lines.next() {
+                if let Some(cat) = strip_case_insensitive_prefix(line4, "Category:") {
+                    let clean = cat.trim();
+                    if !clean.is_empty() && clean != "-" {
+                        category = Some(clean.to_string());
+                    }
+                    remaining.extend(lines);
+                } else {
+                    remaining.push(line4);
+                    remaining.extend(lines);
+                }
+            }
+
             let mut body = remaining.join("\n");
-            // Trim single leading empty line after the 3-line header
+            // Trim single leading empty line after the header
             if body.starts_with('\n') {
                 body.remove(0);
             } else if remaining
@@ -113,6 +139,7 @@ pub fn parse_command_markdown(raw: &str) -> ParsedCommand {
                 usage: Some(u.trim().to_string()),
                 args: Some(a.trim().to_string()),
                 description: Some(d.trim().to_string()),
+                category,
                 has_valid_header: true,
                 body,
             };
@@ -123,6 +150,7 @@ pub fn parse_command_markdown(raw: &str) -> ParsedCommand {
         usage: None,
         args: None,
         description: None,
+        category: None,
         has_valid_header: false,
         body: normalized,
     }
@@ -148,6 +176,7 @@ pub fn format_usage_line(name: &str, args: &str) -> String {
 
 pub fn scaffold_command_markdown(
     name: &str,
+    category: Option<&str>,
     args: Option<&str>,
     description: Option<&str>,
     body: Option<&str>,
@@ -159,10 +188,14 @@ pub fn scaffold_command_markdown(
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("TODO: describe $${}", name));
+    let clean_cat = category
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "-")
+        .unwrap_or("-");
 
     let mut out = format!(
-        "Usage: {}\nArgs: {}\nDescription: {}\n",
-        usage, clean_args, clean_desc
+        "Usage: {}\nArgs: {}\nDescription: {}\nCategory: {}\n",
+        usage, clean_args, clean_desc, clean_cat
     );
 
     if let Some(b) = body {
@@ -181,6 +214,7 @@ pub fn serialize_command_markdown(
     usage: &str,
     args: &str,
     description: &str,
+    category: &str,
     body: &str,
 ) -> String {
     let clean_usage = usage.trim();
@@ -190,10 +224,15 @@ pub fn serialize_command_markdown(
         args.trim()
     };
     let clean_desc = description.trim();
+    let clean_cat = if category.trim().is_empty() {
+        "-"
+    } else {
+        category.trim()
+    };
 
     let mut out = format!(
-        "Usage: {}\nArgs: {}\nDescription: {}\n",
-        clean_usage, clean_args, clean_desc
+        "Usage: {}\nArgs: {}\nDescription: {}\nCategory: {}\n",
+        clean_usage, clean_args, clean_desc, clean_cat
     );
 
     if !body.trim().is_empty() {
@@ -267,12 +306,25 @@ mod tests {
             parsed.description.as_deref(),
             Some("Pull todos and draft prompt")
         );
+        assert_eq!(parsed.category, None);
         assert_eq!(
             parsed.body,
             "Tool use is allowed.\n\n1. Step one\n2. Step two"
         );
         assert_eq!(count_numbered_steps(&parsed.body), 2);
         assert_eq!(highest_numbered_step(&parsed.body), 2);
+    }
+
+    #[test]
+    fn test_parse_4line_header_with_category() {
+        let raw = "Usage: $$deploy [env]\nArgs: [env]\nDescription: Deploy service\nCategory: ops\n\n1. Run deploy script\n";
+        let parsed = parse_command_markdown(raw);
+        assert!(parsed.has_valid_header);
+        assert_eq!(parsed.usage.as_deref(), Some("$$deploy [env]"));
+        assert_eq!(parsed.args.as_deref(), Some("[env]"));
+        assert_eq!(parsed.description.as_deref(), Some("Deploy service"));
+        assert_eq!(parsed.category.as_deref(), Some("ops"));
+        assert_eq!(parsed.body, "1. Run deploy script");
     }
 
     #[test]
@@ -285,22 +337,56 @@ mod tests {
     }
 
     #[test]
+    fn test_display_category_fallback() {
+        let doc_none = CommandDoc::from_raw(
+            "test1".to_string(),
+            "test1.md".to_string(),
+            PathBuf::from("test1.md"),
+            "Usage: $$test1\nArgs: -\nDescription: Test\n".to_string(),
+            "2026-11-24".to_string(),
+            100,
+        );
+        assert_eq!(doc_none.display_category(), "Uncategorized");
+
+        let doc_dash = CommandDoc::from_raw(
+            "test2".to_string(),
+            "test2.md".to_string(),
+            PathBuf::from("test2.md"),
+            "Usage: $$test2\nArgs: -\nDescription: Test\nCategory: -\n".to_string(),
+            "2026-11-24".to_string(),
+            100,
+        );
+        assert_eq!(doc_dash.display_category(), "Uncategorized");
+
+        let doc_cat = CommandDoc::from_raw(
+            "test3".to_string(),
+            "test3.md".to_string(),
+            PathBuf::from("test3.md"),
+            "Usage: $$test3\nArgs: -\nDescription: Test\nCategory: devops\n".to_string(),
+            "2026-11-24".to_string(),
+            100,
+        );
+        assert_eq!(doc_cat.display_category(), "devops");
+    }
+
+    #[test]
     fn test_scaffold_command_markdown() {
-        let s = scaffold_command_markdown("hello", None, None, None);
+        let s = scaffold_command_markdown("hello", None, None, None, None);
         assert_eq!(
             s,
-            "Usage: $$hello\nArgs: -\nDescription: TODO: describe $$hello\n"
+            "Usage: $$hello\nArgs: -\nDescription: TODO: describe $$hello\nCategory: -\n"
         );
 
         let s2 = scaffold_command_markdown(
             "summarize",
+            Some("ai"),
             Some("[text]"),
             Some("Summarize text"),
             Some("Tool use is allowed for this command.\n\n1. Summarize input."),
         );
         assert_eq!(
             s2,
-            "Usage: $$summarize [text]\nArgs: [text]\nDescription: Summarize text\n\nTool use is allowed for this command.\n\n1. Summarize input.\n"
+            "Usage: $$summarize [text]\nArgs: [text]\nDescription: Summarize text\nCategory: ai\n\nTool use is allowed for this command.\n\n1. Summarize input.\n"
         );
     }
 }

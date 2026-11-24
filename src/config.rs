@@ -24,6 +24,7 @@ pub enum Subcommand {
     },
     Add {
         name: Option<String>,
+        category: Option<String>,
         args: Option<String>,
         desc: Option<String>,
         blank: bool,
@@ -31,7 +32,9 @@ pub enum Subcommand {
     Get {
         name: Option<String>,
     },
-    List,
+    List {
+        category: Option<String>,
+    },
     Edit {
         name: String,
     },
@@ -199,7 +202,7 @@ impl Config {
             "tui" => Subcommand::Tui {
                 mode: TuiLaunchMode::Browse,
             },
-            "list" | "ls" => Subcommand::List,
+            "list" | "ls" => parse_list_args(&remaining[1..])?,
             "get" => {
                 let name = remaining.get(1).cloned();
                 Subcommand::Get { name }
@@ -269,8 +272,49 @@ fn parse_config_args(tokens: &[String]) -> Result<Subcommand> {
     }
 }
 
+fn parse_list_args(tokens: &[String]) -> Result<Subcommand> {
+    let mut category: Option<String> = None;
+    let mut i = 0;
+    while i < tokens.len() {
+        let tok = &tokens[i];
+        match tok.as_str() {
+            "--category" | "-c" => {
+                if i + 1 >= tokens.len() {
+                    bail!("Option '{}' requires a category value.", tok);
+                }
+                category = Some(tokens[i + 1].clone());
+                i += 2;
+            }
+            s if s.starts_with("--category=") => {
+                category = Some(s.trim_start_matches("--category=").to_string());
+                i += 1;
+            }
+            s if s.starts_with("-c=") => {
+                category = Some(s.trim_start_matches("-c=").to_string());
+                i += 1;
+            }
+            s if s.starts_with('-') => {
+                bail!(
+                    "Unknown option for 'list': '{}'. Run 'com help' for usage.",
+                    s
+                );
+            }
+            _ => {
+                if category.is_none() {
+                    category = Some(tok.clone());
+                } else {
+                    bail!("Unexpected extra argument '{}' for 'com list'.", tok);
+                }
+                i += 1;
+            }
+        }
+    }
+    Ok(Subcommand::List { category })
+}
+
 fn parse_add_args(tokens: &[String]) -> Result<Subcommand> {
     let mut name: Option<String> = None;
+    let mut category: Option<String> = None;
     let mut args: Option<String> = None;
     let mut desc: Option<String> = None;
     let mut blank = false;
@@ -281,6 +325,21 @@ fn parse_add_args(tokens: &[String]) -> Result<Subcommand> {
         match tok.as_str() {
             "--blank" | "-b" => {
                 blank = true;
+                i += 1;
+            }
+            "--category" | "-c" => {
+                if i + 1 >= tokens.len() {
+                    bail!("Option '{}' requires a category value.", tok);
+                }
+                category = Some(tokens[i + 1].clone());
+                i += 2;
+            }
+            s if s.starts_with("--category=") => {
+                category = Some(s.trim_start_matches("--category=").to_string());
+                i += 1;
+            }
+            s if s.starts_with("-c=") => {
+                category = Some(s.trim_start_matches("-c=").to_string());
                 i += 1;
             }
             "--args" | "-a" => {
@@ -324,6 +383,7 @@ fn parse_add_args(tokens: &[String]) -> Result<Subcommand> {
 
     Ok(Subcommand::Add {
         name,
+        category,
         args,
         desc,
         blank,
@@ -385,7 +445,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cfg_flag.commands_dir, PathBuf::from("/flag/commands"));
-        assert_eq!(cfg_flag.subcommand, Subcommand::List);
+        assert_eq!(cfg_flag.subcommand, Subcommand::List { category: None });
 
         // Check -dir flag syntax
         let cfg_single_dash = Config::parse_with_settings(
@@ -411,6 +471,37 @@ mod tests {
         assert_eq!(
             cfg_single_dash_eq.commands_dir,
             PathBuf::from("/single/dash/eq")
+        );
+
+        // Check add and list with category
+        let cfg_add = Config::parse(
+            &vec_s(&["com", "add", "my_cmd", "--category", "ops", "--args", "[env]", "--desc", "Deploy app"]),
+            None,
+            cwd,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg_add.subcommand,
+            Subcommand::Add {
+                name: Some("my_cmd".to_string()),
+                category: Some("ops".to_string()),
+                args: Some("[env]".to_string()),
+                desc: Some("Deploy app".to_string()),
+                blank: false,
+            }
+        );
+
+        let cfg_list_cat = Config::parse(
+            &vec_s(&["com", "list", "-c", "ops"]),
+            None,
+            cwd,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg_list_cat.subcommand,
+            Subcommand::List {
+                category: Some("ops".to_string()),
+            }
         );
     }
 

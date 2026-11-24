@@ -49,11 +49,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    // Split inner area into: Header Card (3 lines), Divider (1 line), Body (Min(0))
+    // Split inner area into: Header Card (4 lines), Divider (1 line), Body (Min(0))
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(4),
             Constraint::Length(1),
             Constraint::Min(0),
         ])
@@ -62,10 +62,10 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let (words, total_lines) = word_and_line_count(&doc.raw_content);
     let steps = doc.step_count();
     let header_badge = if doc.has_valid_header {
-        Span::styled(" ✓ 3-line Header ", Style::default().fg(Color::Green))
+        Span::styled(" ✓ Valid Header ", Style::default().fg(Color::Green))
     } else {
         Span::styled(
-            " ⚠ Missing 3-line Header ('e' to fix) ",
+            " ⚠ Missing Header ('e' to fix) ",
             Style::default().fg(Color::Yellow),
         )
     };
@@ -108,6 +108,14 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled("   Args: ", Style::default().fg(Color::DarkGray)),
         Span::styled(args_display, Style::default().fg(Color::Cyan)),
+    ]));
+
+    meta_lines.push(Line::from(vec![
+        Span::styled("Category:    ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            doc.display_category(),
+            Style::default().fg(Color::LightGreen),
+        ),
     ]));
 
     meta_lines.push(Line::from(vec![

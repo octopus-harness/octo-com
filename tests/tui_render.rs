@@ -15,6 +15,7 @@ fn test_tui_render_smoke() {
     store
         .create_command(
             "content_prompt",
+            Some("content"),
             None,
             Some("Pull todos and draft article prompt"),
             Some("Tool use is allowed for this command.\n\n1. Pull todos from `doer`.\n2. Merge into `devbook`."),
