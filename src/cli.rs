@@ -9,10 +9,10 @@ pub const USAGE_TEXT: &str = "\
 Usage:
   com                                      Launch the interactive Ratatui studio
   com tui                                  Launch the interactive Ratatui studio
-  com add [name] [--args <args>] [--desc <desc>] [--blank]
-                                           Create a .md command under ./commands (with 3-line header)
+  com add [name] [--category <cat>] [--args <args>] [--desc <desc>] [--blank]
+                                           Create a .md command under ./commands (with 4-line header)
   com get [name]                           Print contents of a .md command from ./commands
-  com list                                 List all available commands with Args & Description
+  com list [--category <cat>]              List available commands (optionally filtered by category)
   com edit <name>                          Open a command definition in $EDITOR
   com rm <name>                            Delete a command definition from ./commands
   com config [show]                        Display current configuration and resolved directory
@@ -40,6 +40,7 @@ pub fn execute_cli(config: &Config) -> Result<CliOutcome> {
         Subcommand::Tui { mode } => Ok(CliOutcome::LaunchTui(mode.clone())),
         Subcommand::Add {
             name,
+            category,
             args,
             desc,
             blank,
@@ -60,6 +61,7 @@ pub fn execute_cli(config: &Config) -> Result<CliOutcome> {
 
             let created = store.create_command(
                 &target_name,
+                category.as_deref(),
                 args.as_deref(),
                 desc.as_deref(),
                 None,
@@ -87,8 +89,12 @@ pub fn execute_cli(config: &Config) -> Result<CliOutcome> {
             print!("{}", doc.raw_content);
             Ok(CliOutcome::Handled)
         }
-        Subcommand::List => {
-            let docs = store.list_commands()?;
+        Subcommand::List { category } => {
+            let mut docs = store.list_commands()?;
+            if let Some(cat) = category {
+                let needle = cat.trim().to_lowercase();
+                docs.retain(|d| d.display_category().to_lowercase() == needle);
+            }
             print!("{}", format_command_list(&docs));
             Ok(CliOutcome::Handled)
         }
@@ -157,6 +163,12 @@ pub fn format_command_list(docs: &[crate::models::CommandDoc]) -> String {
         .max()
         .unwrap_or(7)
         .max(7);
+    let cat_width = docs
+        .iter()
+        .map(|d| d.display_category().len())
+        .max()
+        .unwrap_or(8)
+        .max(8);
     let args_width = docs
         .iter()
         .map(|d| d.display_args().unwrap_or("-").len())
@@ -165,30 +177,37 @@ pub fn format_command_list(docs: &[crate::models::CommandDoc]) -> String {
         .max(4);
 
     out.push_str(&format!(
-        "{:<cmd_w$}  {:<args_w$}  DESCRIPTION\n",
+        "{:<cmd_w$}  {:<cat_w$}  {:<args_w$}  DESCRIPTION\n",
         "COMMAND",
+        "CATEGORY",
         "ARGS",
         cmd_w = cmd_width,
+        cat_w = cat_width,
         args_w = args_width
     ));
     out.push_str(&format!(
-        "{:-<cmd_w$}  {:-<args_w$}  -----------\n",
+        "{:-<cmd_w$}  {:-<cat_w$}  {:-<args_w$}  -----------\n",
+        "",
         "",
         "",
         cmd_w = cmd_width,
+        cat_w = cat_width,
         args_w = args_width
     ));
 
     for doc in docs {
         let cmd_col = format!("$${}", doc.name);
+        let cat_col = doc.display_category();
         let args_col = doc.display_args().unwrap_or("-");
         let desc_col = doc.display_description();
         out.push_str(&format!(
-            "{:<cmd_w$}  {:<args_w$}  {}\n",
+            "{:<cmd_w$}  {:<cat_w$}  {:<args_w$}  {}\n",
             cmd_col,
+            cat_col,
             args_col,
             desc_col,
             cmd_w = cmd_width,
+            cat_w = cat_width,
             args_w = args_width
         ));
     }
@@ -210,6 +229,7 @@ mod tests {
             commands_dir: dir.clone(),
             subcommand: Subcommand::Add {
                 name: Some("hello".to_string()),
+                category: Some("greetings".to_string()),
                 args: Some("[name]".to_string()),
                 desc: Some("Greet a user".to_string()),
                 blank: false,
@@ -226,8 +246,26 @@ mod tests {
         let table = format_command_list(&docs);
         assert!(table.contains("1 commands available:"));
         assert!(table.contains("$$hello"));
+        assert!(table.contains("greetings"));
         assert!(table.contains("[name]"));
         assert!(table.contains("Greet a user"));
+
+        // Filter by category
+        let list_filtered_cfg = Config {
+            commands_dir: dir.clone(),
+            subcommand: Subcommand::List {
+                category: Some("greetings".to_string()),
+            },
+        };
+        assert!(matches!(execute_cli(&list_filtered_cfg).unwrap(), CliOutcome::Handled));
+
+        let list_empty_cfg = Config {
+            commands_dir: dir.clone(),
+            subcommand: Subcommand::List {
+                category: Some("nonexistent".to_string()),
+            },
+        };
+        assert!(matches!(execute_cli(&list_empty_cfg).unwrap(), CliOutcome::Handled));
 
         let rm_cfg = Config {
             commands_dir: dir.clone(),

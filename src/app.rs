@@ -41,17 +41,19 @@ pub enum Modal {
     },
     CreateCommand {
         name_input: String,
+        category_input: String,
         args_input: String,
         desc_input: String,
         tool_use_allowed: bool,
-        focus_field: usize, // 0: Name, 1: Args, 2: Description, 3: ToolUse checkbox
+        focus_field: usize, // 0: Name, 1: Category, 2: Args, 3: Description, 4: ToolUse checkbox
     },
     EditHeader {
         original_name: String,
         name_input: String,
+        category_input: String,
         args_input: String,
         desc_input: String,
-        focus_field: usize, // 0: Name, 1: Args, 2: Description
+        focus_field: usize, // 0: Name, 1: Category, 2: Args, 3: Description
     },
     QuickAppend {
         content_input: String,
@@ -97,6 +99,7 @@ impl App {
         let initial_modal = match launch_mode {
             TuiLaunchMode::CreateModal => Some(Modal::CreateCommand {
                 name_input: String::new(),
+                category_input: String::new(),
                 args_input: "-".to_string(),
                 desc_input: String::new(),
                 tool_use_allowed: true,
@@ -178,6 +181,7 @@ impl App {
                 .filter(|c| {
                     c.name.to_lowercase().contains(&needle)
                         || c.display_description().to_lowercase().contains(&needle)
+                        || c.display_category().to_lowercase().contains(&needle)
                         || c.display_args()
                             .unwrap_or("")
                             .to_lowercase()
@@ -337,6 +341,7 @@ impl App {
             KeyCode::Char('n') => {
                 self.modal = Some(Modal::CreateCommand {
                     name_input: String::new(),
+                    category_input: String::new(),
                     args_input: "-".to_string(),
                     desc_input: String::new(),
                     tool_use_allowed: true,
@@ -348,6 +353,7 @@ impl App {
                     self.modal = Some(Modal::EditHeader {
                         original_name: cmd.name.clone(),
                         name_input: cmd.name.clone(),
+                        category_input: cmd.category.clone().unwrap_or_default(),
                         args_input: cmd.args.clone().unwrap_or_else(|| "-".to_string()),
                         desc_input: cmd.description.clone().unwrap_or_default(),
                         focus_field: 0,
@@ -468,6 +474,7 @@ impl App {
             },
             Modal::CreateCommand {
                 mut name_input,
+                mut category_input,
                 mut args_input,
                 mut desc_input,
                 mut tool_use_allowed,
@@ -475,9 +482,10 @@ impl App {
             } => match code {
                 KeyCode::Esc => {}
                 KeyCode::Tab | KeyCode::Down => {
-                    focus_field = (focus_field + 1) % 4;
+                    focus_field = (focus_field + 1) % 5;
                     self.modal = Some(Modal::CreateCommand {
                         name_input,
+                        category_input,
                         args_input,
                         desc_input,
                         tool_use_allowed,
@@ -485,19 +493,21 @@ impl App {
                     });
                 }
                 KeyCode::BackTab | KeyCode::Up => {
-                    focus_field = (focus_field + 3) % 4;
+                    focus_field = (focus_field + 4) % 5;
                     self.modal = Some(Modal::CreateCommand {
                         name_input,
+                        category_input,
                         args_input,
                         desc_input,
                         tool_use_allowed,
                         focus_field,
                     });
                 }
-                KeyCode::Char(' ') if focus_field == 3 => {
+                KeyCode::Char(' ') if focus_field == 4 => {
                     tool_use_allowed = !tool_use_allowed;
                     self.modal = Some(Modal::CreateCommand {
                         name_input,
+                        category_input,
                         args_input,
                         desc_input,
                         tool_use_allowed,
@@ -515,8 +525,14 @@ impl App {
                     } else {
                         Some(desc_input.trim())
                     };
+                    let cat_opt = if category_input.trim().is_empty() {
+                        None
+                    } else {
+                        Some(category_input.trim())
+                    };
                     match self.store.create_command(
                         &name_input,
+                        cat_opt,
                         Some(&args_input),
                         desc_opt,
                         starter_body,
@@ -531,6 +547,7 @@ impl App {
                             self.set_error(e.to_string());
                             self.modal = Some(Modal::CreateCommand {
                                 name_input,
+                                category_input,
                                 args_input,
                                 desc_input,
                                 tool_use_allowed,
@@ -545,15 +562,19 @@ impl App {
                             name_input.pop();
                         }
                         1 => {
-                            args_input.pop();
+                            category_input.pop();
                         }
                         2 => {
+                            args_input.pop();
+                        }
+                        3 => {
                             desc_input.pop();
                         }
                         _ => {}
                     }
                     self.modal = Some(Modal::CreateCommand {
                         name_input,
+                        category_input,
                         args_input,
                         desc_input,
                         tool_use_allowed,
@@ -563,12 +584,14 @@ impl App {
                 KeyCode::Char(c) => {
                     match focus_field {
                         0 => name_input.push(c),
-                        1 => args_input.push(c),
-                        2 => desc_input.push(c),
+                        1 => category_input.push(c),
+                        2 => args_input.push(c),
+                        3 => desc_input.push(c),
                         _ => {}
                     }
                     self.modal = Some(Modal::CreateCommand {
                         name_input,
+                        category_input,
                         args_input,
                         desc_input,
                         tool_use_allowed,
@@ -578,6 +601,7 @@ impl App {
                 _ => {
                     self.modal = Some(Modal::CreateCommand {
                         name_input,
+                        category_input,
                         args_input,
                         desc_input,
                         tool_use_allowed,
@@ -588,26 +612,29 @@ impl App {
             Modal::EditHeader {
                 original_name,
                 mut name_input,
+                mut category_input,
                 mut args_input,
                 mut desc_input,
                 mut focus_field,
             } => match code {
                 KeyCode::Esc => {}
                 KeyCode::Tab | KeyCode::Down => {
-                    focus_field = (focus_field + 1) % 3;
+                    focus_field = (focus_field + 1) % 4;
                     self.modal = Some(Modal::EditHeader {
                         original_name,
                         name_input,
+                        category_input,
                         args_input,
                         desc_input,
                         focus_field,
                     });
                 }
                 KeyCode::BackTab | KeyCode::Up => {
-                    focus_field = (focus_field + 2) % 3;
+                    focus_field = (focus_field + 3) % 4;
                     self.modal = Some(Modal::EditHeader {
                         original_name,
                         name_input,
+                        category_input,
                         args_input,
                         desc_input,
                         focus_field,
@@ -617,6 +644,7 @@ impl App {
                     match self.store.update_command_header(
                         &original_name,
                         &name_input,
+                        &category_input,
                         &args_input,
                         &desc_input,
                     ) {
@@ -630,6 +658,7 @@ impl App {
                             self.modal = Some(Modal::EditHeader {
                                 original_name,
                                 name_input,
+                                category_input,
                                 args_input,
                                 desc_input,
                                 focus_field,
@@ -643,9 +672,12 @@ impl App {
                             name_input.pop();
                         }
                         1 => {
-                            args_input.pop();
+                            category_input.pop();
                         }
                         2 => {
+                            args_input.pop();
+                        }
+                        3 => {
                             desc_input.pop();
                         }
                         _ => {}
@@ -653,6 +685,7 @@ impl App {
                     self.modal = Some(Modal::EditHeader {
                         original_name,
                         name_input,
+                        category_input,
                         args_input,
                         desc_input,
                         focus_field,
@@ -661,13 +694,15 @@ impl App {
                 KeyCode::Char(c) => {
                     match focus_field {
                         0 => name_input.push(c),
-                        1 => args_input.push(c),
-                        2 => desc_input.push(c),
+                        1 => category_input.push(c),
+                        2 => args_input.push(c),
+                        3 => desc_input.push(c),
                         _ => {}
                     }
                     self.modal = Some(Modal::EditHeader {
                         original_name,
                         name_input,
+                        category_input,
                         args_input,
                         desc_input,
                         focus_field,
@@ -677,6 +712,7 @@ impl App {
                     self.modal = Some(Modal::EditHeader {
                         original_name,
                         name_input,
+                        category_input,
                         args_input,
                         desc_input,
                         focus_field,
@@ -795,7 +831,12 @@ mod tests {
         for ch in "test_flow".chars() {
             app.handle_key(KeyCode::Char(ch));
         }
-        // Tab twice to Description field
+        // Tab once to Category field
+        app.handle_key(KeyCode::Tab);
+        for ch in "testing".chars() {
+            app.handle_key(KeyCode::Char(ch));
+        }
+        // Tab twice to Description field (skipping Args)
         app.handle_key(KeyCode::Tab);
         app.handle_key(KeyCode::Tab);
         for ch in "Run test workflow".chars() {
@@ -806,6 +847,7 @@ mod tests {
         assert!(app.modal.is_none());
         assert_eq!(app.all_commands.len(), 1);
         assert_eq!(app.current_command().unwrap().name, "test_flow");
+        assert_eq!(app.current_command().unwrap().display_category(), "testing");
 
         // Append a step via 'a'
         app.handle_key(KeyCode::Char('a'));

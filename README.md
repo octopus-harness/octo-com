@@ -112,12 +112,13 @@ Launch the full-screen terminal studio with `com` or `octo-com`:
 
 ## 📋 The Octopus `$$` Runbook Specification
 
-Every reusable prompt in `commands/<name>.md` conforms to a standardized 3-line metadata header, followed by instructions optimized for LLM comprehension:
+Every reusable prompt in `commands/<name>.md` conforms to a standardized 4-line metadata header (with backward-compatible support for legacy 3-line headers), followed by instructions optimized for LLM comprehension:
 
 ```markdown
 Usage: $$<name> [args]
 Args: <args or "-">
 Description: <one-line summary of capability>
+Category: <category or "-">
 
 Tool use is allowed for this command.
 
@@ -127,7 +128,8 @@ Tool use is allowed for this command.
 ```
 
 - **Prefix-agnostic**: Run `com get my_prompt` or `com get '$$my_prompt'`—`octo-com` resolves both seamlessly.
-- **Auto-Validation**: The TUI automatically validates headers and flags missing fields with an `[!header]` alert tag.
+- **Auto-Validation**: The TUI automatically validates headers and flags missing fields with an alert tag.
+- **Backward Compatible**: Existing 3-line headers without a `Category:` field are fully supported and display as `Uncategorized`.
 
 ---
 
@@ -147,11 +149,15 @@ com get deep_spec.md
 
 ### Prompt Authoring & Management
 ```bash
-# List all commands in an aligned summary table
+# List all commands in an aligned summary table (COMMAND, CATEGORY, ARGS, DESCRIPTION)
 com list
 
-# Scaffold a new command with valid 3-line header
-com add deep_spec --args "[feature]" --desc "Synthesize issues into an actionable spec"
+# Filter commands by category
+com list --category dev
+com list -c ops
+
+# Scaffold a new command with valid 4-line header
+com add deep_spec --category dev --args "[feature]" --desc "Synthesize issues into an actionable spec"
 
 # Create a blank markdown command
 com add scratch --blank

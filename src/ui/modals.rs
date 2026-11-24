@@ -19,6 +19,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Modal::Search { input } => render_search(f, input),
         Modal::CreateCommand {
             name_input,
+            category_input,
             args_input,
             desc_input,
             tool_use_allowed,
@@ -26,6 +27,7 @@ pub fn render(f: &mut Frame, app: &App) {
         } => render_create_command(
             f,
             name_input,
+            category_input,
             args_input,
             desc_input,
             *tool_use_allowed,
@@ -34,6 +36,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Modal::EditHeader {
             original_name,
             name_input,
+            category_input,
             args_input,
             desc_input,
             focus_field,
@@ -41,6 +44,7 @@ pub fn render(f: &mut Frame, app: &App) {
             f,
             original_name,
             name_input,
+            category_input,
             args_input,
             desc_input,
             *focus_field,
@@ -121,12 +125,13 @@ fn render_search(f: &mut Frame, input: &str) {
 fn render_create_command(
     f: &mut Frame,
     name_input: &str,
+    category_input: &str,
     args_input: &str,
     desc_input: &str,
     tool_use_allowed: bool,
     focus_field: usize,
 ) {
-    let area = centered_rect(65, 52, f.area());
+    let area = centered_rect(65, 58, f.area());
     f.render_widget(Clear, area);
 
     let block = Block::default()
@@ -192,30 +197,39 @@ fn render_create_command(
         Line::from(""),
         Line::from(vec![
             Span::styled(prefix_str(1), field_style(1)),
-            Span::styled("Args (or '-'): ", field_style(1)),
+            Span::styled("Category:     ", field_style(1)),
             Span::styled(
-                format!("{}{}", args_input, cursor_str(1)),
-                Style::default().fg(Color::Cyan),
+                format!("{}{}", category_input, cursor_str(1)),
+                Style::default().fg(Color::LightGreen),
             ),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::styled(prefix_str(2), field_style(2)),
-            Span::styled("Description:  ", field_style(2)),
+            Span::styled("Args (or '-'): ", field_style(2)),
             Span::styled(
-                format!("{}{}", desc_input, cursor_str(2)),
-                Style::default().fg(Color::LightYellow),
+                format!("{}{}", args_input, cursor_str(2)),
+                Style::default().fg(Color::Cyan),
             ),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::styled(prefix_str(3), field_style(3)),
+            Span::styled("Description:  ", field_style(3)),
+            Span::styled(
+                format!("{}{}", desc_input, cursor_str(3)),
+                Style::default().fg(Color::LightYellow),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(prefix_str(4), field_style(4)),
             Span::styled(
                 format!(
                     "{} Include 'Tool use is allowed for this command.' starter",
                     check_mark
                 ),
-                field_style(3),
+                field_style(4),
             ),
         ]),
         Line::from(""),
@@ -232,11 +246,12 @@ fn render_edit_header(
     f: &mut Frame,
     original_name: &str,
     name_input: &str,
+    category_input: &str,
     args_input: &str,
     desc_input: &str,
     focus_field: usize,
 ) {
-    let area = centered_rect(65, 48, f.area());
+    let area = centered_rect(65, 54, f.area());
     f.render_widget(Clear, area);
 
     let block = Block::default()
@@ -295,24 +310,33 @@ fn render_edit_header(
         Line::from(""),
         Line::from(vec![
             Span::styled(prefix_str(1), field_style(1)),
-            Span::styled("Args (or '-'): ", field_style(1)),
+            Span::styled("Category:     ", field_style(1)),
             Span::styled(
-                format!("{}{}", args_input, cursor_str(1)),
-                Style::default().fg(Color::Cyan),
+                format!("{}{}", category_input, cursor_str(1)),
+                Style::default().fg(Color::LightGreen),
             ),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::styled(prefix_str(2), field_style(2)),
-            Span::styled("Description:  ", field_style(2)),
+            Span::styled("Args (or '-'): ", field_style(2)),
             Span::styled(
-                format!("{}{}", desc_input, cursor_str(2)),
+                format!("{}{}", args_input, cursor_str(2)),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(prefix_str(3), field_style(3)),
+            Span::styled("Description:  ", field_style(3)),
+            Span::styled(
+                format!("{}{}", desc_input, cursor_str(3)),
                 Style::default().fg(Color::LightYellow),
             ),
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            "Tab/↑/↓: Switch field │ Enter: Save 3-line header │ Esc: Cancel",
+            "Tab/↑/↓: Switch field │ Enter: Save header │ Esc: Cancel",
             Style::default().fg(Color::DarkGray),
         )),
     ];
