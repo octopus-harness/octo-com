@@ -100,13 +100,13 @@ Launch the full-screen terminal studio with `com` or `octo-com`:
 
 ### Studio Capabilities
 - **2-Pane Master–Detail Layout**: Effortlessly navigate your prompt library with Vi-style keys (`j`/`k`, `Tab`, `1`/`2`).
-- **Dual View Modes (`v` / `m`)**: Instantly toggle between **Styled GFM Preview** (rendered headers, code badges, step counters) and **Raw Line-Numbered Markdown**.
+- **3-Way View Modes (`v` / `m`)**: Instantly cycle between **Preview (Merged)** (variables resolved with missing variable alerts), **Preview (Template)** (placeholders highlighted in cyan), and **Raw Line-Numbered Markdown**.
 - **Header Scaffolding (`n`)**: Generate new command files pre-populated with standard Octopus headers in seconds.
 - **In-App Editing & Renaming (`e`)**: Update command metadata or rename files in place without touching disk manually.
 - **Quick-Append Steps (`a`)**: Append the next numbered step (`N. ...`) right from the TUI.
 - **Seamless `$EDITOR` Handoff (`E`)**: Suspends the terminal studio cleanly, launches `$EDITOR` (`nvim`, `vim`, `nano`), and automatically reloads modifications on exit.
 - **Instant Search (`/`)**: Live fuzzy filtering across prompt titles, argument specs, descriptions, and file contents.
-- **Clipboard Integration (`y` / `c`)**: Copy the `$$command` invocation or full raw markdown content straight to your system clipboard.
+- **Clipboard Integration (`y` / `c`)**: Copy the `$$command` invocation or markdown content straight to your system clipboard (copies merged in Merged view, raw template in Template/Raw views).
 
 ---
 
@@ -139,13 +139,35 @@ Tool use is allowed for this command.
 
 ### Prompt Retrieval for Agents
 ```bash
-# Agents query prompts instantly via stdout
+# Agents query prompts instantly via stdout (interpolated by default)
 com get content_prompt
+
+# Output unmerged raw template with placeholders intact
+com get content_prompt --raw
 
 # Supports leading $$ and .md extension automatically
 com get '$$content_prompt'
 com get deep_spec.md
 ```
+
+### Shared Global Variables
+Reconfigure and share commands across environments without editing command files:
+
+```bash
+# View active global variables from ~/.config/octo-com/vars.yml
+com vars
+
+# Open ~/.config/octo-com/vars.yml in $EDITOR (creates starter template if missing)
+com vars edit
+```
+
+In your command Markdown files, reference variables using standard Mustache syntax:
+```markdown
+2. Verify target project with tools.noteking.get_project({ id: {{research_project_id}} }).
+4. Create the note in project {{research_project_id}}.
+```
+- Variables are defined as flat scalar key-value pairs in `~/.config/octo-com/vars.yml` (e.g. `research_project_id: 3`).
+- Missing or undefined variables remain unreplaced as `{{variable_name}}` with a warning in stderr or a badge in the TUI.
 
 ### Prompt Authoring & Management
 ```bash
@@ -209,7 +231,7 @@ com config
 | `j` / `k` / `↑` / `↓` | Navigation | Move selection down / up, or scroll detail pane |
 | `J` / `K` / `PgDn` / `PgUp`| Navigation | Fast-scroll detail pane |
 | `g` / `G` | Navigation | Jump to top / bottom of active view |
-| `v` / `m` | View Mode | Toggle between **Preview (GFM)** and **Raw Markdown** |
+| `v` / `m` | View Mode | Cycle between **Preview (Merged)**, **Preview (Template)**, and **Raw Markdown** |
 | `n` | CRUD | **New Command** (scaffolds 3-line header modal) |
 | `e` | CRUD | **Edit Header / Rename** command file |
 | `a` | CRUD | **Quick Append** numbered step (`N. ...`) |
@@ -217,8 +239,8 @@ com config
 | `d` | CRUD | **Delete** selected command with confirmation |
 | `/` | Search | Live filter across names, arguments, descriptions, and body |
 | `y` | Clipboard | Yank `$$<name>` invocation to system clipboard |
-| `c` / `Y` | Clipboard | Copy full raw Markdown content to system clipboard |
-| `r` | Store | Reload commands directory from disk |
+| `c` / `Y` | Clipboard | Copy command Markdown to clipboard (Merged in merged view, else raw) |
+| `r` | Store | Reload commands and vars from disk |
 | `?` | Help | Toggle Keyboard Shortcuts modal |
 | `q` / `Esc` | General | Clear search filter or quit `octo-com` |
 

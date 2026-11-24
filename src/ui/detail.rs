@@ -70,8 +70,16 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         )
     };
 
-    let mut meta_lines = Vec::new();
-    meta_lines.push(Line::from(vec![
+    let (display_body, missing_vars) = match app.view_mode {
+        ViewMode::PreviewMerged => {
+            let res = app.vars.interpolate(&doc.body);
+            (res.rendered, res.missing)
+        }
+        ViewMode::PreviewTemplate => (doc.body.clone(), Vec::new()),
+        ViewMode::Raw => (String::new(), Vec::new()),
+    };
+
+    let mut meta_spans = vec![
         Span::styled(
             format!("$${}", doc.name),
             Style::default()
@@ -84,18 +92,32 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         ),
         Span::raw(" · "),
         header_badge,
-        Span::styled(
-            format!(
-                "· {} steps · {}w / {}L · {} · {}",
-                steps,
-                words,
-                total_lines,
-                format_bytes(doc.size_bytes),
-                doc.updated_at
-            ),
-            Style::default().fg(Color::DarkGray),
+    ];
+
+    if app.view_mode == ViewMode::PreviewMerged && !missing_vars.is_empty() {
+        meta_spans.push(Span::raw(" · "));
+        meta_spans.push(Span::styled(
+            format!(" ⚠ {} missing var(s) ", missing_vars.len()),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    meta_spans.push(Span::styled(
+        format!(
+            "· {} steps · {}w / {}L · {} · {}",
+            steps,
+            words,
+            total_lines,
+            format_bytes(doc.size_bytes),
+            doc.updated_at
         ),
-    ]));
+        Style::default().fg(Color::DarkGray),
+    ));
+
+    let mut meta_lines = Vec::new();
+    meta_lines.push(Line::from(meta_spans));
 
     let args_display = doc.display_args().unwrap_or("-");
     meta_lines.push(Line::from(vec![
@@ -138,7 +160,8 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(divider, chunks[1]);
 
     let rendered_lines = match app.view_mode {
-        ViewMode::Preview => render_markdown_preview(&doc.body, chunks[2].width as usize),
+        ViewMode::PreviewMerged => render_markdown_preview(&display_body, chunks[2].width as usize, false),
+        ViewMode::PreviewTemplate => render_markdown_preview(&display_body, chunks[2].width as usize, true),
         ViewMode::Raw => render_markdown_raw(&doc.raw_content),
     };
 
@@ -179,7 +202,7 @@ fn render_markdown_raw(text: &str) -> Vec<Line<'_>> {
         .collect()
 }
 
-fn render_markdown_preview(text: &str, width: usize) -> Vec<Line<'_>> {
+fn render_markdown_preview(text: &str, width: usize, is_template_mode: bool) -> Vec<Line<'_>> {
     if text.trim().is_empty() {
         return vec![Line::from(Span::styled(
             "(no execution instructions yet — press 'a' to append a numbered step or 'E' to edit in $EDITOR)",
@@ -204,10 +227,13 @@ fn render_markdown_preview(text: &str, width: usize) -> Vec<Line<'_>> {
         }
 
         if in_code_block {
-            out.push(Line::from(Span::styled(
-                format!("  {}", raw_line),
+            let mut spans = vec![Span::raw("  ")];
+            spans.extend(style_text_segment(
+                raw_line,
                 Style::default().fg(Color::Green),
-            )));
+                is_template_mode,
+            ));
+            out.push(Line::from(spans));
             continue;
         }
 
@@ -251,7 +277,11 @@ fn render_markdown_preview(text: &str, width: usize) -> Vec<Line<'_>> {
                         .add_modifier(Modifier::BOLD),
                 ),
             ];
-            spans.extend(style_inline_code(rest, Style::default().fg(Color::White)));
+            spans.extend(style_inline_code(
+                rest,
+                Style::default().fg(Color::White),
+                is_template_mode,
+            ));
             out.push(Line::from(spans));
             continue;
         }
@@ -299,12 +329,17 @@ fn render_markdown_preview(text: &str, width: usize) -> Vec<Line<'_>> {
                 Span::raw(indent),
                 Span::styled("• ", Style::default().fg(Color::Magenta)),
             ];
-            spans.extend(style_inline_code(rest, Style::default().fg(Color::White)));
+            spans.extend(style_inline_code(
+                rest,
+                Style::default().fg(Color::White),
+                is_template_mode,
+            ));
             out.push(Line::from(spans));
         } else {
             out.push(Line::from(style_inline_code(
                 raw_line,
                 Style::default().fg(Color::White),
+                is_template_mode,
             )));
         }
     }
@@ -312,7 +347,7 @@ fn render_markdown_preview(text: &str, width: usize) -> Vec<Line<'_>> {
     out
 }
 
-fn style_inline_code(line: &str, default_style: Style) -> Vec<Span<'_>> {
+fn style_inline_code(line: &str, default_style: Style, is_template_mode: bool) -> Vec<Span<'_>> {
     let mut spans = Vec::new();
     let mut in_backtick = false;
     let mut start = 0;
@@ -322,14 +357,12 @@ fn style_inline_code(line: &str, default_style: Style) -> Vec<Span<'_>> {
             let segment = &line[start..idx];
             if !segment.is_empty() {
                 if in_backtick {
-                    spans.push(Span::styled(
-                        segment,
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ));
+                    let code_style = Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD);
+                    spans.extend(style_text_segment(segment, code_style, is_template_mode));
                 } else {
-                    spans.push(Span::styled(segment, default_style));
+                    spans.extend(style_text_segment(segment, default_style, is_template_mode));
                 }
             }
             in_backtick = !in_backtick;
@@ -338,11 +371,63 @@ fn style_inline_code(line: &str, default_style: Style) -> Vec<Span<'_>> {
     }
 
     if start < line.len() {
-        spans.push(Span::styled(&line[start..], default_style));
+        let segment = &line[start..];
+        spans.extend(style_text_segment(segment, default_style, is_template_mode));
     }
 
     if spans.is_empty() {
         spans.push(Span::raw(""));
+    }
+
+    spans
+}
+
+fn style_text_segment<'a>(text: &'a str, base_style: Style, is_template_mode: bool) -> Vec<Span<'a>> {
+    let mut spans = Vec::new();
+    let mut remaining = text;
+
+    while let Some(open_idx) = remaining.find("{{") {
+        let before = &remaining[..open_idx];
+        if !before.is_empty() {
+            spans.push(Span::styled(before, base_style));
+        }
+        let after_open = &remaining[open_idx + 2..];
+        if let Some(close_idx) = after_open.find("}}") {
+            let inner = &after_open[..close_idx];
+            let whole_placeholder = &remaining[open_idx..open_idx + 2 + close_idx + 2];
+            let var_name = inner.trim();
+            if !var_name.is_empty()
+                && var_name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            {
+                let var_style = if is_template_mode {
+                    Style::default()
+                        .fg(Color::LightCyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                };
+                spans.push(Span::styled(whole_placeholder, var_style));
+            } else {
+                spans.push(Span::styled(whole_placeholder, base_style));
+            }
+            remaining = &after_open[close_idx + 2..];
+        } else {
+            spans.push(Span::styled(&remaining[open_idx..], base_style));
+            remaining = "";
+            break;
+        }
+    }
+
+    if !remaining.is_empty() {
+        spans.push(Span::styled(remaining, base_style));
+    }
+
+    if spans.is_empty() {
+        spans.push(Span::styled("", base_style));
     }
 
     spans

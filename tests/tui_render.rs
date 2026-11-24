@@ -30,6 +30,12 @@ fn test_tui_render_smoke() {
     terminal.draw(|f| ui::render(f, &app)).unwrap();
 
     app.focused_pane = Pane::Detail;
+    app.view_mode = ViewMode::PreviewMerged;
+    terminal.draw(|f| ui::render(f, &app)).unwrap();
+
+    app.view_mode = ViewMode::PreviewTemplate;
+    terminal.draw(|f| ui::render(f, &app)).unwrap();
+
     app.view_mode = ViewMode::Raw;
     terminal.draw(|f| ui::render(f, &app)).unwrap();
 }

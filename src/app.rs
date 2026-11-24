@@ -5,6 +5,7 @@ use crossterm::event::KeyCode;
 use crate::config::TuiLaunchMode;
 use crate::models::CommandDoc;
 use crate::store::CommandStore;
+use crate::vars::Vars;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
@@ -14,21 +15,24 @@ pub enum Pane {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
-    Preview,
+    PreviewMerged,
+    PreviewTemplate,
     Raw,
 }
 
 impl ViewMode {
     pub fn toggle(self) -> Self {
         match self {
-            ViewMode::Preview => ViewMode::Raw,
-            ViewMode::Raw => ViewMode::Preview,
+            ViewMode::PreviewMerged => ViewMode::PreviewTemplate,
+            ViewMode::PreviewTemplate => ViewMode::Raw,
+            ViewMode::Raw => ViewMode::PreviewMerged,
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            ViewMode::Preview => "Preview (GFM)",
+            ViewMode::PreviewMerged => "Preview (Merged)",
+            ViewMode::PreviewTemplate => "Preview (Template)",
             ViewMode::Raw => "Raw",
         }
     }
@@ -77,6 +81,7 @@ pub struct WorkspaceStats {
 
 pub struct App {
     pub store: CommandStore,
+    pub vars: Vars,
     pub launch_mode: TuiLaunchMode,
     pub all_commands: Vec<CommandDoc>,
     pub filtered_commands: Vec<CommandDoc>,
@@ -96,6 +101,7 @@ pub struct App {
 impl App {
     pub fn new(commands_dir: PathBuf, launch_mode: TuiLaunchMode) -> Self {
         let store = CommandStore::new(commands_dir);
+        let vars = Vars::load();
         let initial_modal = match launch_mode {
             TuiLaunchMode::CreateModal => Some(Modal::CreateCommand {
                 name_input: String::new(),
@@ -110,12 +116,13 @@ impl App {
 
         let mut app = Self {
             store,
+            vars,
             launch_mode,
             all_commands: Vec::new(),
             filtered_commands: Vec::new(),
             selected_index: 0,
             focused_pane: Pane::CommandList,
-            view_mode: ViewMode::Preview,
+            view_mode: ViewMode::PreviewMerged,
             detail_scroll: 0,
             search_query: None,
             modal: initial_modal,
@@ -134,6 +141,7 @@ impl App {
     }
 
     pub fn reload(&mut self, select_name: Option<&str>) {
+        self.vars = Vars::load();
         let prev_name = select_name
             .map(ToOwned::to_owned)
             .or_else(|| self.current_command().map(|c| c.name.clone()));
@@ -271,7 +279,14 @@ impl App {
             KeyCode::Enter => {
                 if self.launch_mode == TuiLaunchMode::SelectForGet {
                     if let Some(cmd) = self.current_command() {
-                        self.stdout_on_exit = Some(cmd.raw_content.clone());
+                        let text = match self.view_mode {
+                            ViewMode::PreviewMerged => {
+                                let res = self.vars.interpolate(&cmd.raw_content);
+                                res.rendered
+                            }
+                            ViewMode::PreviewTemplate | ViewMode::Raw => cmd.raw_content.clone(),
+                        };
+                        self.stdout_on_exit = Some(text);
                         self.should_quit = true;
                     }
                 } else if self.focused_pane == Pane::CommandList {
@@ -401,17 +416,24 @@ impl App {
             }
             KeyCode::Char('c') | KeyCode::Char('Y') => {
                 if let Some(cmd) = self.current_command() {
-                    let raw = cmd.raw_content.clone();
+                    let (content, mode_label) = match self.view_mode {
+                        ViewMode::PreviewMerged => {
+                            let res = self.vars.interpolate(&cmd.raw_content);
+                            (res.rendered, "Merged")
+                        }
+                        ViewMode::PreviewTemplate => (cmd.raw_content.clone(), "Template"),
+                        ViewMode::Raw => (cmd.raw_content.clone(), "Raw"),
+                    };
                     let fname = cmd.filename.clone();
                     self.copy_to_clipboard(
-                        &raw,
-                        &format!("Copied {} Markdown to clipboard", fname),
+                        &content,
+                        &format!("Copied {} ({}) Markdown to clipboard", fname, mode_label),
                     );
                 }
             }
             KeyCode::Char('r') => {
                 self.reload(None);
-                self.set_info("Reloaded commands from disk");
+                self.set_info("Reloaded commands and vars from disk");
             }
             KeyCode::Char('?') => {
                 self.modal = Some(Modal::Help);
@@ -862,9 +884,13 @@ mod tests {
             .contains("Call memorable MCP"));
 
         // Toggle view mode
-        assert_eq!(app.view_mode, ViewMode::Preview);
+        assert_eq!(app.view_mode, ViewMode::PreviewMerged);
+        app.handle_key(KeyCode::Char('v'));
+        assert_eq!(app.view_mode, ViewMode::PreviewTemplate);
         app.handle_key(KeyCode::Char('v'));
         assert_eq!(app.view_mode, ViewMode::Raw);
+        app.handle_key(KeyCode::Char('v'));
+        assert_eq!(app.view_mode, ViewMode::PreviewMerged);
 
         // Delete command via 'd' then 'y'
         app.handle_key(KeyCode::Char('d'));

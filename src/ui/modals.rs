@@ -522,7 +522,7 @@ fn render_help(f: &mut Frame) {
         row("g / G", "Jump to top / bottom of active pane"),
         row(
             "v / m",
-            "Toggle between Preview (styled GFM) and Raw Markdown view",
+            "Cycle view: Preview (Merged) -> Preview (Template) -> Raw",
         ),
         Line::from(""),
         Line::from(Span::styled(
@@ -563,7 +563,7 @@ fn render_help(f: &mut Frame) {
         row("y", "Yank command invocation ($$name) to system clipboard"),
         row(
             "c / Y",
-            "Copy full raw command Markdown to system clipboard",
+            "Copy command Markdown to clipboard (Merged in merged view, else raw)",
         ),
         row(
             "? / Esc / q",

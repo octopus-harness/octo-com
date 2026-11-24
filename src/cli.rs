@@ -2,7 +2,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 
 use anyhow::{bail, Result};
 
-use crate::config::{Config, ConfigAction, Subcommand, TuiLaunchMode, UserSettings};
+use crate::config::{Config, ConfigAction, Subcommand, TuiLaunchMode, UserSettings, VarsAction};
 use crate::store::CommandStore;
 
 pub const USAGE_TEXT: &str = "\
@@ -11,10 +11,12 @@ Usage:
   com tui                                  Launch the interactive Ratatui studio
   com add [name] [--category <cat>] [--args <args>] [--desc <desc>] [--blank]
                                            Create a .md command under ./commands (with 4-line header)
-  com get [name]                           Print contents of a .md command from ./commands
+  com get [name] [--raw]                   Print contents of a .md command (interpolated by default)
   com list [--category <cat>]              List available commands (optionally filtered by category)
   com edit <name>                          Open a command definition in $EDITOR
   com rm <name>                            Delete a command definition from ./commands
+  com vars [show]                          Display global variables from ~/.config/octo-com/vars.yml
+  com vars edit                            Open ~/.config/octo-com/vars.yml in $EDITOR
   com config [show]                        Display current configuration and resolved directory
   com config get-dir                       Print the active commands directory
   com config set-dir <path>                Set the persistent global commands directory
@@ -70,7 +72,7 @@ pub fn execute_cli(config: &Config) -> Result<CliOutcome> {
             println!("Created {}", created.path.display());
             Ok(CliOutcome::Handled)
         }
-        Subcommand::Get { name } => {
+        Subcommand::Get { name, raw } => {
             let target_name = match name {
                 Some(n) => n.clone(),
                 None => {
@@ -86,7 +88,24 @@ pub fn execute_cli(config: &Config) -> Result<CliOutcome> {
             };
 
             let doc = store.get_command(&target_name)?;
-            print!("{}", doc.raw_content);
+            if *raw {
+                print!("{}", doc.raw_content);
+            } else {
+                let vars = crate::vars::Vars::load();
+                let res = vars.interpolate(&doc.raw_content);
+                if !res.missing.is_empty() {
+                    eprintln!(
+                        "Warning: {} undefined variable(s): {}",
+                        res.missing.len(),
+                        res.missing
+                            .iter()
+                            .map(|s| format!("{{{{{}}}}}", s))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+                print!("{}", res.rendered);
+            }
             Ok(CliOutcome::Handled)
         }
         Subcommand::List { category } => {
@@ -114,6 +133,38 @@ pub fn execute_cli(config: &Config) -> Result<CliOutcome> {
         Subcommand::Remove { name } => {
             let deleted_path = store.delete_command(name)?;
             println!("Removed {}", deleted_path.display());
+            Ok(CliOutcome::Handled)
+        }
+        Subcommand::Vars(action) => {
+            match action {
+                VarsAction::Show => {
+                    let path = crate::vars::Vars::default_path()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    println!("Variables file: {}", path);
+                    let vars = crate::vars::Vars::load();
+                    if vars.map.is_empty() {
+                        println!("No variables defined (or file is empty/missing). Run 'com vars edit' to define variables.");
+                    } else {
+                        println!("\n{} variables defined:", vars.map.len());
+                        for (k, v) in &vars.map {
+                            println!("  {}: {}", k, v);
+                        }
+                    }
+                }
+                VarsAction::Edit => {
+                    let path = crate::vars::Vars::ensure_template_exists()?;
+                    let editor = std::env::var("EDITOR")
+                        .or_else(|_| std::env::var("VISUAL"))
+                        .unwrap_or_else(|_| "nano".to_string());
+                    let status = std::process::Command::new(&editor)
+                        .arg(&path)
+                        .status()?;
+                    if !status.success() {
+                        bail!("Editor '{}' exited with status {}.", editor, status);
+                    }
+                }
+            }
             Ok(CliOutcome::Handled)
         }
         Subcommand::Config(action) => {
@@ -275,5 +326,36 @@ mod tests {
         };
         assert!(matches!(execute_cli(&rm_cfg).unwrap(), CliOutcome::Handled));
         assert!(store.list_commands().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_cli_get_with_raw_and_interpolation() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("commands");
+
+        let store = CommandStore::new(&dir);
+        let content = "Usage: $$greet\nArgs: -\nDescription: Greet\nCategory: -\n\nHello {{name}}!";
+        store.ensure_dir().unwrap();
+        std::fs::write(dir.join("greet.md"), content).unwrap();
+
+        // Test com get greet --raw
+        let get_raw_cfg = Config {
+            commands_dir: dir.clone(),
+            subcommand: Subcommand::Get {
+                name: Some("greet".to_string()),
+                raw: true,
+            },
+        };
+        assert!(matches!(execute_cli(&get_raw_cfg).unwrap(), CliOutcome::Handled));
+
+        // Test com get greet (interpolated)
+        let get_interp_cfg = Config {
+            commands_dir: dir.clone(),
+            subcommand: Subcommand::Get {
+                name: Some("greet".to_string()),
+                raw: false,
+            },
+        };
+        assert!(matches!(execute_cli(&get_interp_cfg).unwrap(), CliOutcome::Handled));
     }
 }
